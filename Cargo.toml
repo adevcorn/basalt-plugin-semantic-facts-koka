@@ -1,0 +1,18 @@
+[package]
+name = "basalt-plugin-semantic-facts-koka"
+version = "0.1.0"
+edition = "2021"
+description = "Semantic facts (declarations, calls, imports, algebraic effects) for Koka"
+license = "Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+basalt-plugin-sdk = { path = "../basalt-plugin-sdk", features = ["serde"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1
