@@ -283,6 +283,28 @@ fn derive_declarations(
     }
 }
 
+/// Find the matching `)` for the first `(` in `s`, respecting nested parens.
+fn find_matching_rparen(s: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut started = false;
+    for (idx, b) in s.bytes().enumerate() {
+        match b {
+            b'(' => {
+                depth += 1;
+                started = true;
+            }
+            b')' if started => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Inspect Koka function signatures (`fun f(...) : <eff1,eff2> ret` or `: eff ret`)
 /// and emit `IOOperation`, `Mutation`, and `AsyncBoundary` facts directly from
 /// declared algebraic effect rows.
@@ -302,11 +324,16 @@ fn derive_signature_effects(
             continue;
         }
         let chunk = &text[start..end];
-        let header = chunk.split('{').next().unwrap_or(chunk);
-        let Some((_, after_rparen)) = header.split_once(')') else {
+        let Some(rparen_idx) = find_matching_rparen(chunk) else {
             continue;
         };
-        let Some((_, after_colon)) = after_rparen.split_once(':') else {
+        let after_rparen = &chunk[rparen_idx + 1..];
+        // Stop at the function body delimiter (`{`, `=`, or newline without continuation).
+        let sig_tail = after_rparen
+            .split(|c| c == '{' || c == '=' || c == '\n')
+            .next()
+            .unwrap_or("");
+        let Some((_, after_colon)) = sig_tail.split_once(':') else {
             continue;
         };
         let eff_slice = after_colon.trim();
@@ -522,5 +549,32 @@ mod tests {
         let mut facts = Vec::new();
         derive_imports(src, &mut facts);
         assert_eq!(facts.len(), 4); // 2 ImportModule + 2 DependsOn
+    }
+
+    #[test]
+    fn total_function_with_record_copy_and_nested_parens_has_no_mutations() {
+        let src = b"pub fun map-entity(e : entity, f : (int) -> total int) : total entity\n  val next = e(relations = [])\n  next\n";
+        let retrieval = vec![(0, src.len() as u32, "function map-entity", 3)];
+        let mut facts = Vec::new();
+        derive_signature_effects(src, &retrieval, &mut facts);
+        assert!(
+            facts.is_empty(),
+            "pure : total function with record copy must emit zero mutation/IO facts, got {facts:?}"
+        );
+    }
+
+    #[test]
+    fn custom_algebraic_effect_emits_effect_reference() {
+        let src = b"pub fun sync-loc(id : string) : <catalog-store,exn> ()\n  ()";
+        let retrieval = vec![(0, src.len() as u32, "function sync-loc", 3)];
+        let mut facts = Vec::new();
+        derive_signature_effects(src, &retrieval, &mut facts);
+        assert!(
+            facts.iter().any(|f| matches!(
+                f,
+                SemanticFact::ReferenceSymbol { target, .. } if target == "catalog-store"
+            )),
+            "expected ReferenceSymbol(catalog-store), got {facts:?}"
+        );
     }
 }
